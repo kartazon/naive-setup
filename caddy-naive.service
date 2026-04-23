@@ -8,6 +8,9 @@ Requires=network-online.target
 Type=notify
 User=caddy-naive
 Group=caddy-naive
+WorkingDirectory=/opt/caddy-forwardproxy-naive
+Environment=XDG_DATA_HOME=/var/lib/caddy-naive
+Environment=XDG_CONFIG_HOME=/etc/caddy
 ExecStart=/opt/caddy-forwardproxy-naive/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/opt/caddy-forwardproxy-naive/caddy reload --config /etc/caddy/Caddyfile --force
 TimeoutStopSec=5s
