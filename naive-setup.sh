@@ -16,7 +16,6 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-# Alpine split the qrencode CLI between releases: 3.17-3.18 = libqrencode, 3.19+ = libqrencode-tools.
 apk_try_add_qrencode() {
   apk add --no-cache libqrencode-tools 2>/dev/null && return 0
   apk add --no-cache libqrencode 2>/dev/null && return 0
@@ -24,19 +23,17 @@ apk_try_add_qrencode() {
   return 1
 }
 
-# When qrencode is not installed: show the URL in a box (not a scannable QR; copy the link above).
 print_url_ascii_box() {
   local url=$1
   local w=72
-  local top bottom
+  local top
   top="$(printf '%*s' "$w" '' | tr ' ' '-')"
-  bottom="$top"
   echo ""
   echo "  +${top}+"
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
     printf '  | %-*s |\n' "$w" "$line"
   done < <(printf '%s' "$url" | fold -w "$w" 2>/dev/null || printf '%s\n' "$url")
-  echo "  +${bottom}+"
+  echo "  +${top}+"
   echo "  (ASCII box - not a QR; use the link or install qrencode for a scannable terminal QR.)"
 }
 
@@ -459,7 +456,7 @@ show_share_link_and_qr() {
   share_url=$(naive_share_url "$PROXY_USER" "$PROXY_PASS" "$DOMAIN")
 
   echo ""
-  echo "================================================================================" 
+  echo "================================================================================"
   echo "  Share link (import in naive client - host, port, user, password, type QUIC / HTTP/3)"
   echo "================================================================================"
   echo "$share_url"
@@ -473,6 +470,79 @@ show_share_link_and_qr() {
     echo "  For a real QR: apk add libqrencode-tools 2>/dev/null || apk add libqrencode  (Alpine community)"
     echo "                  apt install qrencode   (Debian/Ubuntu)"
   fi
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+# print_firewall_reminder
+# Detects the active firewall tool and prints ready-to-run commands for
+# opening ports 80 (HTTP/ACME) and 443 (HTTPS/NaiveProxy).
+# ---------------------------------------------------------------------------
+print_firewall_reminder() {
+  echo ""
+  echo "================================================================================"
+  echo "  IMPORTANT: Firewall configuration"
+  echo "================================================================================"
+  echo "  Caddy needs ports 80 (ACME challenge) and 443 (proxy) open."
+  echo "  If you have a firewall enabled, run the appropriate commands below."
+  echo ""
+
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
+    echo "  [ufw detected and active]"
+    echo ""
+    echo "    ufw allow 80/tcp"
+    echo "    ufw allow 443/tcp"
+    echo "    ufw allow 443/udp   # QUIC / HTTP3"
+    echo "    ufw reload"
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q 'running'; then
+    echo "  [firewalld detected and running]"
+    echo ""
+    echo "    firewall-cmd --permanent --add-service=http"
+    echo "    firewall-cmd --permanent --add-service=https"
+    echo "    firewall-cmd --permanent --add-port=443/udp   # QUIC / HTTP3"
+    echo "    firewall-cmd --reload"
+  elif command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q 'table'; then
+    echo "  [nftables detected]"
+    echo ""
+    echo "    nft add rule inet filter input tcp dport { 80, 443 } accept"
+    echo "    nft add rule inet filter input udp dport 443 accept   # QUIC / HTTP3"
+    echo ""
+    echo "  To make persistent: save ruleset to /etc/nftables.conf"
+  elif command -v iptables >/dev/null 2>&1; then
+    echo "  [iptables detected]"
+    echo ""
+    echo "    iptables -A INPUT -p tcp --dport 80  -j ACCEPT"
+    echo "    iptables -A INPUT -p tcp --dport 443 -j ACCEPT"
+    echo "    iptables -A INPUT -p udp --dport 443 -j ACCEPT   # QUIC / HTTP3"
+    echo ""
+    echo "  To persist rules (Debian/Ubuntu):"
+    echo "    apt install iptables-persistent && netfilter-persistent save"
+    echo "  To persist rules (RHEL/CentOS):"
+    echo "    service iptables save"
+  else
+    echo "  No known firewall tool detected automatically."
+    echo "  If you have a firewall, open the following ports manually:"
+    echo ""
+    echo "  -- ufw --"
+    echo "    ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp && ufw reload"
+    echo ""
+    echo "  -- firewalld --"
+    echo "    firewall-cmd --permanent --add-service=http"
+    echo "    firewall-cmd --permanent --add-service=https"
+    echo "    firewall-cmd --permanent --add-port=443/udp"
+    echo "    firewall-cmd --reload"
+    echo ""
+    echo "  -- nftables --"
+    echo "    nft add rule inet filter input tcp dport { 80, 443 } accept"
+    echo "    nft add rule inet filter input udp dport 443 accept"
+    echo ""
+    echo "  -- iptables --"
+    echo "    iptables -A INPUT -p tcp --dport 80  -j ACCEPT"
+    echo "    iptables -A INPUT -p tcp --dport 443 -j ACCEPT"
+    echo "    iptables -A INPUT -p udp --dport 443 -j ACCEPT"
+  fi
+  echo ""
+  echo "================================================================================"
   echo ""
 }
 
@@ -501,31 +571,20 @@ read_secret() {
 
 # ---------------------------------------------------------------------------
 # port_owner PORT
-# Print a human-readable "PID (name)" string for whatever is listening on
-# the given TCP port, using the most portable method available.
-# Prints nothing (returns 1) if the port is free.
 # ---------------------------------------------------------------------------
 port_owner() {
   local port=$1
   local result=""
 
-  # --- 1. /proc/net/tcp + /proc/net/tcp6 (Linux, no extra tools needed) ---
   if [[ -r /proc/net/tcp || -r /proc/net/tcp6 ]]; then
-    # Convert decimal port to 4-digit uppercase hex
-    local hex_port
+    local hex_port inode=""
     hex_port=$(printf '%04X' "$port")
-    local inode=""
-    # Look for LISTEN state (0A) lines matching :PORT
     for f in /proc/net/tcp /proc/net/tcp6; do
       [[ -r "$f" ]] || continue
-      inode=$(awk -v hp=":${hex_port}" '
-        $4 == "0A" && $2 ~ hp"$" { print $10; exit }
-      ' "$f" 2>/dev/null || true)
+      inode=$(awk -v hp=":${hex_port}" '$4 == "0A" && $2 ~ hp"$" { print $10; exit }' "$f" 2>/dev/null || true)
       [[ -n "$inode" ]] && break
     done
-
     if [[ -n "$inode" ]]; then
-      # Find the PID that owns this socket inode
       local pid=""
       for fd_dir in /proc/[0-9]*/fd; do
         [[ -d "$fd_dir" ]] || continue
@@ -534,14 +593,9 @@ port_owner() {
           break
         fi
       done
-
       if [[ -n "$pid" ]]; then
         local comm
-        if [[ -r "/proc/${pid}/comm" ]]; then
-          comm=$(cat "/proc/${pid}/comm" 2>/dev/null || echo "?")
-        else
-          comm=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
-        fi
+        comm=$(cat "/proc/${pid}/comm" 2>/dev/null || ps -p "$pid" -o comm= 2>/dev/null || echo "?")
         result="${pid} (${comm})"
       else
         result="unknown PID (inode ${inode})"
@@ -549,12 +603,10 @@ port_owner() {
     fi
   fi
 
-  # --- 2. ss fallback ---
   if [[ -z "$result" ]] && command -v ss >/dev/null 2>&1; then
-    local ss_out
+    local ss_out pid comm
     ss_out=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -v '^State' || true)
     if [[ -n "$ss_out" ]]; then
-      local pid comm
       pid=$(echo "$ss_out" | grep -oP 'pid=\K[0-9]+' | head -1 || true)
       if [[ -n "$pid" ]]; then
         comm=$(ps -p "$pid" -o comm= 2>/dev/null || cat "/proc/${pid}/comm" 2>/dev/null || echo "?")
@@ -565,23 +617,16 @@ port_owner() {
     fi
   fi
 
-  # --- 3. netstat fallback ---
   if [[ -z "$result" ]] && command -v netstat >/dev/null 2>&1; then
     local ns_out
     ns_out=$(netstat -tlnp 2>/dev/null | awk -v p=":${port} " '$4 ~ p && /LISTEN/ {print $NF}' | head -1 || true)
-    if [[ -n "$ns_out" ]]; then
-      # netstat prints "pid/name"
-      result=$(echo "$ns_out" | sed 's|/| (|; s|$|)|')
-    fi
+    [[ -n "$ns_out" ]] && result=$(echo "$ns_out" | sed 's|/| (|; s|$|)|')
   fi
 
-  # --- 4. lsof fallback ---
   if [[ -z "$result" ]] && command -v lsof >/dev/null 2>&1; then
     local lsof_out
     lsof_out=$(lsof -iTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null | awk 'NR==2 {print $2, $1}' || true)
-    if [[ -n "$lsof_out" ]]; then
-      result=$(echo "$lsof_out" | awk '{print $1" ("$2")"}')
-    fi
+    [[ -n "$lsof_out" ]] && result=$(echo "$lsof_out" | awk '{print $1" ("$2")"}')
   fi
 
   if [[ -n "$result" ]]; then
@@ -593,13 +638,11 @@ port_owner() {
 
 # ---------------------------------------------------------------------------
 # check_ports
-# Die if port 80 or 443 is already in use, showing who owns it.
 # ---------------------------------------------------------------------------
 check_ports() {
   echo "Checking ports 80 and 443..." >&2
-  local failed=0
+  local failed=0 owner80 owner443
 
-  local owner80
   if owner80=$(port_owner 80); then
     echo "ERROR: Port 80 is already in use by: ${owner80}" >&2
     echo "       Stop that process before running this script." >&2
@@ -608,7 +651,6 @@ check_ports() {
     echo "  Port  80: free" >&2
   fi
 
-  local owner443
   if owner443=$(port_owner 443); then
     echo "ERROR: Port 443 is already in use by: ${owner443}" >&2
     echo "       Stop that process before running this script." >&2
@@ -743,6 +785,7 @@ main() {
   fi
 
   show_share_link_and_qr
+  print_firewall_reminder
 
   echo "Starting Caddy as '$CADDY_USER': $CADDY_BIN run --config $caddyfile_path"
   cd "$(dirname "$CADDY_BIN")"
