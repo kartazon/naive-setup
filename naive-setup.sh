@@ -16,7 +16,7 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-# Alpine split the qrencode CLI between releases: 3.17–3.18 = libqrencode, 3.19+ = libqrencode-tools.
+# Alpine split the qrencode CLI between releases: 3.17-3.18 = libqrencode, 3.19+ = libqrencode-tools.
 apk_try_add_qrencode() {
   apk add --no-cache libqrencode-tools 2>/dev/null && return 0
   apk add --no-cache libqrencode 2>/dev/null && return 0
@@ -29,22 +29,22 @@ print_url_ascii_box() {
   local url=$1
   local w=72
   local top bottom
-  top="$(printf '%*s' "$w" '' | tr ' ' '─')"
+  top="$(printf '%*s' "$w" '' | tr ' ' '-')"
   bottom="$top"
   echo ""
-  echo "  ┌${top}┐"
+  echo "  +${top}+"
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
-    printf '  │ %-*s │\n' "$w" "$line"
+    printf '  | %-*s |\n' "$w" "$line"
   done < <(printf '%s' "$url" | fold -w "$w" 2>/dev/null || printf '%s\n' "$url")
-  echo "  └${bottom}┘"
-  echo "  (ASCII box — not a QR; use the link or install qrencode for a scannable terminal QR.)"
+  echo "  +${bottom}+"
+  echo "  (ASCII box - not a QR; use the link or install qrencode for a scannable terminal QR.)"
 }
 
 prompt_install_yes() {
   local _msg=$1
   if [[ ! -t 0 ]]; then
     echo "$_msg" >&2
-    echo "Not running on a TTY — install packages manually, then re-run this script." >&2
+    echo "Not running on a TTY - install packages manually, then re-run this script." >&2
     return 1
   fi
   printf '%s [Y/n]: ' "$_msg"
@@ -56,7 +56,6 @@ prompt_install_yes() {
 }
 
 _words_uniq() {
-  # grep returns 1 when there are no lines; with pipefail that would kill the script.
   echo "$1" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' || true
 }
 
@@ -367,7 +366,6 @@ function read_caddy_quoted(buf, pos,    n, i, c, c2, out) {
   }
   return ""
 }
-# Caddy allows tls user@host and basic_auth u p without quotes; our writer uses quoted form.
 function read_caddy_unquoted(buf, pos,    n, i, c, out) {
   n = length(buf)
   out = ""
@@ -461,9 +459,9 @@ show_share_link_and_qr() {
   share_url=$(naive_share_url "$PROXY_USER" "$PROXY_PASS" "$DOMAIN")
 
   echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Share link (import in naive client — host, port, user, password, type QUIC / HTTP/3)"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "================================================================================" 
+  echo "  Share link (import in naive client - host, port, user, password, type QUIC / HTTP/3)"
+  echo "================================================================================"
   echo "$share_url"
   echo ""
   echo "QR code:"
@@ -501,8 +499,130 @@ read_secret() {
   fi
 }
 
-# Create a system user for Caddy if it does not exist yet.
-# Supports both glibc systems (useradd) and Alpine (adduser -S).
+# ---------------------------------------------------------------------------
+# port_owner PORT
+# Print a human-readable "PID (name)" string for whatever is listening on
+# the given TCP port, using the most portable method available.
+# Prints nothing (returns 1) if the port is free.
+# ---------------------------------------------------------------------------
+port_owner() {
+  local port=$1
+  local result=""
+
+  # --- 1. /proc/net/tcp + /proc/net/tcp6 (Linux, no extra tools needed) ---
+  if [[ -r /proc/net/tcp || -r /proc/net/tcp6 ]]; then
+    # Convert decimal port to 4-digit uppercase hex
+    local hex_port
+    hex_port=$(printf '%04X' "$port")
+    local inode=""
+    # Look for LISTEN state (0A) lines matching :PORT
+    for f in /proc/net/tcp /proc/net/tcp6; do
+      [[ -r "$f" ]] || continue
+      inode=$(awk -v hp=":${hex_port}" '
+        $4 == "0A" && $2 ~ hp"$" { print $10; exit }
+      ' "$f" 2>/dev/null || true)
+      [[ -n "$inode" ]] && break
+    done
+
+    if [[ -n "$inode" ]]; then
+      # Find the PID that owns this socket inode
+      local pid=""
+      for fd_dir in /proc/[0-9]*/fd; do
+        [[ -d "$fd_dir" ]] || continue
+        if ls -la "$fd_dir" 2>/dev/null | grep -q "socket:\[${inode}\]"; then
+          pid=$(echo "$fd_dir" | cut -d/ -f3)
+          break
+        fi
+      done
+
+      if [[ -n "$pid" ]]; then
+        local comm
+        if [[ -r "/proc/${pid}/comm" ]]; then
+          comm=$(cat "/proc/${pid}/comm" 2>/dev/null || echo "?")
+        else
+          comm=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
+        fi
+        result="${pid} (${comm})"
+      else
+        result="unknown PID (inode ${inode})"
+      fi
+    fi
+  fi
+
+  # --- 2. ss fallback ---
+  if [[ -z "$result" ]] && command -v ss >/dev/null 2>&1; then
+    local ss_out
+    ss_out=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -v '^State' || true)
+    if [[ -n "$ss_out" ]]; then
+      local pid comm
+      pid=$(echo "$ss_out" | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+      if [[ -n "$pid" ]]; then
+        comm=$(ps -p "$pid" -o comm= 2>/dev/null || cat "/proc/${pid}/comm" 2>/dev/null || echo "?")
+        result="${pid} (${comm})"
+      else
+        result=$(echo "$ss_out" | head -1)
+      fi
+    fi
+  fi
+
+  # --- 3. netstat fallback ---
+  if [[ -z "$result" ]] && command -v netstat >/dev/null 2>&1; then
+    local ns_out
+    ns_out=$(netstat -tlnp 2>/dev/null | awk -v p=":${port} " '$4 ~ p && /LISTEN/ {print $NF}' | head -1 || true)
+    if [[ -n "$ns_out" ]]; then
+      # netstat prints "pid/name"
+      result=$(echo "$ns_out" | sed 's|/| (|; s|$|)|')
+    fi
+  fi
+
+  # --- 4. lsof fallback ---
+  if [[ -z "$result" ]] && command -v lsof >/dev/null 2>&1; then
+    local lsof_out
+    lsof_out=$(lsof -iTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null | awk 'NR==2 {print $2, $1}' || true)
+    if [[ -n "$lsof_out" ]]; then
+      result=$(echo "$lsof_out" | awk '{print $1" ("$2")"}')
+    fi
+  fi
+
+  if [[ -n "$result" ]]; then
+    printf '%s' "$result"
+    return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# check_ports
+# Die if port 80 or 443 is already in use, showing who owns it.
+# ---------------------------------------------------------------------------
+check_ports() {
+  echo "Checking ports 80 and 443..." >&2
+  local failed=0
+
+  local owner80
+  if owner80=$(port_owner 80); then
+    echo "ERROR: Port 80 is already in use by: ${owner80}" >&2
+    echo "       Stop that process before running this script." >&2
+    failed=1
+  else
+    echo "  Port  80: free" >&2
+  fi
+
+  local owner443
+  if owner443=$(port_owner 443); then
+    echo "ERROR: Port 443 is already in use by: ${owner443}" >&2
+    echo "       Stop that process before running this script." >&2
+    failed=1
+  else
+    echo "  Port 443: free" >&2
+  fi
+
+  [[ "$failed" -eq 0 ]] || die "Occupied ports must be freed before Caddy can start."
+}
+
+# ---------------------------------------------------------------------------
+# System user for Caddy.
+# ---------------------------------------------------------------------------
 CADDY_USER="caddy-naive"
 
 ensure_caddy_user() {
@@ -513,7 +633,6 @@ ensure_caddy_user() {
   if command -v useradd >/dev/null 2>&1; then
     useradd -r -s /bin/false -M -d /opt/caddy-forwardproxy-naive "$CADDY_USER"
   elif command -v adduser >/dev/null 2>&1; then
-    # Alpine busybox adduser
     adduser -S -H -s /sbin/nologin -D "$CADDY_USER"
   else
     die "Cannot create system user '$CADDY_USER': neither useradd nor adduser found."
@@ -522,6 +641,9 @@ ensure_caddy_user() {
 
 main() {
   echo "Naive server setup (Caddy + forwardproxy)..." >&2
+
+  check_ports
+
   offer_install_dependencies
   command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
     || die "Need curl or wget for downloads. On Alpine: apk add --no-cache curl wget ca-certificates"
@@ -536,8 +658,7 @@ main() {
   mkdir -p /etc/caddy /var/www/html
 
   if [[ -f "$caddyfile_path" && -s "$caddyfile_path" ]]; then
-    echo "Found existing $caddyfile_path — skipping domain, DNS check, email, and proxy prompts."
-    # Ensure correct ownership on re-run (e.g. after manual edits or first upgrade)
+    echo "Found existing $caddyfile_path - skipping domain, DNS check, email, and proxy prompts."
     ensure_caddy_user
     chown root:"$CADDY_USER" "$caddyfile_path"
     chmod 0640 "$caddyfile_path"
@@ -564,7 +685,7 @@ main() {
     fi
     echo "DNS check passed."
 
-    printf 'Email (for ACME / Let'\''s Encrypt): '
+    printf 'Email (for ACME / Lets Encrypt): '
     read -r EMAIL
     local EMAIL_TRIM
     EMAIL_TRIM=$(printf '%s' "$EMAIL" | tr -d ' ')
@@ -584,7 +705,6 @@ main() {
     trap 'rm -f "$TMP_CADDY"' EXIT
     write_caddyfile "$DOMAIN_TRIM" "$EMAIL" "$PROXY_USER" "$PROXY_PASS" "$TMP_CADDY"
     mv "$TMP_CADDY" "$caddyfile_path"
-    # root:caddy-naive 0640 — root writes, caddy-naive reads, others: nothing
     ensure_caddy_user
     chown root:"$CADDY_USER" "$caddyfile_path"
     chmod 0640 "$caddyfile_path"
@@ -615,11 +735,10 @@ main() {
   [[ -n "$CADDY_BIN" ]] || die "Could not find caddy binary after extracting archive."
   chmod +x "$CADDY_BIN"
 
-  # Grant the binary the right to bind privileged ports without running as root.
   if command -v setcap >/dev/null 2>&1; then
     setcap 'cap_net_bind_service=+ep' "$CADDY_BIN"
   else
-    echo "Warning: setcap not found — Caddy may fail to bind port 443 as non-root." >&2
+    echo "Warning: setcap not found - Caddy may fail to bind port 443 as non-root." >&2
     echo "  Install: apt install libcap2-bin  OR  apk add libcap" >&2
   fi
 
