@@ -501,6 +501,25 @@ read_secret() {
   fi
 }
 
+# Create a system user for Caddy if it does not exist yet.
+# Supports both glibc systems (useradd) and Alpine (adduser -S).
+CADDY_USER="caddy-naive"
+
+ensure_caddy_user() {
+  if id "$CADDY_USER" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Creating system user '$CADDY_USER'..." >&2
+  if command -v useradd >/dev/null 2>&1; then
+    useradd -r -s /bin/false -M -d /opt/caddy-forwardproxy-naive "$CADDY_USER"
+  elif command -v adduser >/dev/null 2>&1; then
+    # Alpine busybox adduser
+    adduser -S -H -s /sbin/nologin -D "$CADDY_USER"
+  else
+    die "Cannot create system user '$CADDY_USER': neither useradd nor adduser found."
+  fi
+}
+
 main() {
   echo "Naive server setup (Caddy + forwardproxy)..." >&2
   offer_install_dependencies
@@ -518,6 +537,10 @@ main() {
 
   if [[ -f "$caddyfile_path" && -s "$caddyfile_path" ]]; then
     echo "Found existing $caddyfile_path — skipping domain, DNS check, email, and proxy prompts."
+    # Ensure correct ownership on re-run (e.g. after manual edits or first upgrade)
+    ensure_caddy_user
+    chown root:"$CADDY_USER" "$caddyfile_path"
+    chmod 0640 "$caddyfile_path"
     local _exports
     _exports=$(exports_from_caddyfile "$caddyfile_path") || die "Could not parse $caddyfile_path (expected :443, tls, and basic_auth lines)."
     # shellcheck disable=SC1090
@@ -558,16 +581,22 @@ main() {
 
     local TMP_CADDY
     TMP_CADDY=$(mktemp_file)
-	trap 'rm -f "$TMP_CADDY"' EXIT
+    trap 'rm -f "$TMP_CADDY"' EXIT
     write_caddyfile "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS" "$TMP_CADDY"
     mv "$TMP_CADDY" "$caddyfile_path"
-    chmod 0600 "$caddyfile_path"
+    # root:caddy-naive 0640 — root writes, caddy-naive reads, others: nothing
+    ensure_caddy_user
+    chown root:"$CADDY_USER" "$caddyfile_path"
+    chmod 0640 "$caddyfile_path"
   fi
 
   echo "Downloading static index.html..."
   download_to "https://raw.githubusercontent.com/nginx/nginx/5eaf45f11e85459b52c18f876e69320df420ae29/docs/html/index.html" \
     /var/www/html/index.html
-  chmod 0644 /var/www/html/index.html
+  chown root:"$CADDY_USER" /var/www/html
+  chmod 0750 /var/www/html
+  chown root:"$CADDY_USER" /var/www/html/index.html
+  chmod 0640 /var/www/html/index.html
 
   local CADDY_RELEASE_URL="https://github.com/klzgrad/forwardproxy/releases/download/v2.10.0-naive/caddy-forwardproxy-naive.tar.xz"
   local CADDY_DIR="/opt/caddy-forwardproxy-naive"
@@ -586,11 +615,19 @@ main() {
   [[ -n "$CADDY_BIN" ]] || die "Could not find caddy binary after extracting archive."
   chmod +x "$CADDY_BIN"
 
+  # Grant the binary the right to bind privileged ports without running as root.
+  if command -v setcap >/dev/null 2>&1; then
+    setcap 'cap_net_bind_service=+ep' "$CADDY_BIN"
+  else
+    echo "Warning: setcap not found — Caddy may fail to bind port 443 as non-root." >&2
+    echo "  Install: apt install libcap2-bin  OR  apk add libcap" >&2
+  fi
+
   show_share_link_and_qr
 
-  echo "Starting Caddy: $CADDY_BIN run --config /etc/caddy/Caddyfile"
+  echo "Starting Caddy as '$CADDY_USER': $CADDY_BIN run --config $caddyfile_path"
   cd "$(dirname "$CADDY_BIN")"
-  exec "$CADDY_BIN" run --config /etc/caddy/Caddyfile
+  exec su -s /bin/sh "$CADDY_USER" -c "\"$CADDY_BIN\" run --config \"$caddyfile_path\""
 }
 
 require_root
