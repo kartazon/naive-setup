@@ -559,7 +559,7 @@ main() {
     echo "This machine's public IP: $MY_IP"
 
     echo "Checking that $DOMAIN resolves to $MY_IP ..."
-    if ! domain_resolves_to_ip "$DOMAIN" "$MY_IP"; then
+    if ! domain_resolves_to_ip "$DOMAIN_TRIM" "$MY_IP"; then
       die "DNS for '$DOMAIN' does not resolve to $MY_IP. Fix DNS (A record) and try again."
     fi
     echo "DNS check passed."
