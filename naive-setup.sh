@@ -582,7 +582,7 @@ main() {
     local TMP_CADDY
     TMP_CADDY=$(mktemp_file)
     trap 'rm -f "$TMP_CADDY"' EXIT
-    write_caddyfile "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS" "$TMP_CADDY"
+    write_caddyfile "$DOMAIN_TRIM" "$EMAIL" "$PROXY_USER" "$PROXY_PASS" "$TMP_CADDY"
     mv "$TMP_CADDY" "$caddyfile_path"
     # root:caddy-naive 0640 — root writes, caddy-naive reads, others: nothing
     ensure_caddy_user
