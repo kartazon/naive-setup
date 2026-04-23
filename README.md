@@ -22,7 +22,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kartazon/naive-setup/main/na
 
 ```bash
 mkdir -p ~/naive-server && cd ~/naive-server
-wget -O start_server.sh "https://raw.githubusercontent.com/ZonD80/naivetools/main/server/start_server.sh"
+wget -O start_server.sh "https://raw.githubusercontent.com/kartazon/naive-setup/main/naive-setup.sh"
 chmod +x start_server.sh
 sudo ./start_server.sh
 ```
