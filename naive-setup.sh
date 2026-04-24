@@ -558,13 +558,28 @@ main() {
   mkdir -p /etc/caddy /var/www/html
 
   if [[ -f "$caddyfile_path" && -s "$caddyfile_path" ]]; then
-    echo "Found existing $caddyfile_path - skipping domain, DNS check, email, and proxy prompts."
+    echo "Found existing $caddyfile_path." >&2
     ensure_caddy_user
     chown root:"$CADDY_USER" "$caddyfile_path"
     chmod 0640 "$caddyfile_path"
-    local _exports
-    _exports=$(exports_from_caddyfile "$caddyfile_path") || die "Could not parse $caddyfile_path (expected :443, tls, and basic_auth lines)."
-    eval "$_exports"
+
+    if [[ -f "$NAIVE_ENV_FILE" ]]; then
+      echo "Loading config from $NAIVE_ENV_FILE..." >&2
+      # shellcheck disable=SC1090
+      . "$NAIVE_ENV_FILE"
+      DOMAIN="${NAIVE_DOMAIN:-}"
+      EMAIL="${NAIVE_EMAIL:-}"
+      [[ -n "$DOMAIN" && -n "$EMAIL" && -n "${PROXY_USER:-}" && -n "${PROXY_PASS:-}" ]] \
+        || die "Incomplete values in $NAIVE_ENV_FILE — delete it and re-run to reconfigure."
+    else
+      # legacy: parse Caddyfile once, then persist to naive.env
+      local _exports
+      _exports=$(exports_from_caddyfile "$caddyfile_path") \
+        || die "Could not parse $caddyfile_path (expected :443, tls, and basic_auth lines)."
+      eval "$_exports"
+      write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS"
+      echo "Migrated config to $NAIVE_ENV_FILE (0600)." >&2
+    fi
     write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS"
   else
     printf 'Domain name (e.g. example.com): '
