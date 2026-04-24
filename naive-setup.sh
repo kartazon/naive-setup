@@ -488,6 +488,18 @@ show_share_link_and_qr() {
 # ---------------------------------------------------------------------------
 CADDY_USER="caddy-naive"
 
+check_conflicting_services() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  local svc
+  for svc in nginx apache2 httpd caddy; do
+    if systemctl is-active --quiet "$svc"; then
+      echo "Warning: service '$svc' is active and may be using ports 80/443." >&2
+    fi
+  done
+}
+
 ensure_caddy_user() {
   if id "$CADDY_USER" >/dev/null 2>&1; then
     return 0
@@ -514,6 +526,7 @@ main() {
     esac
   done
 
+  check_conflicting_services
   check_ports
 
   offer_install_dependencies
