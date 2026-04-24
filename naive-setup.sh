@@ -602,8 +602,26 @@ main() {
   chown root:"$CADDY_USER" /var/www/html/index.html
   chmod 0640 /var/www/html/index.html
 
-  local CADDY_RELEASE_URL="https://github.com/klzgrad/forwardproxy/releases/download/v2.10.0-naive/caddy-forwardproxy-naive.tar.xz"
-  local CADDY_TAR_SHA256="598b34841ac88b66f5b0b3a7bb371a02682915e92916e4e017d27be5399cd389"
+  local arch
+  arch=$(uname -m 2>/dev/null || echo unknown)
+
+  local CADDY_RELEASE_URL CADDY_TAR_SHA256
+  case "$arch" in
+    x86_64|amd64)
+      CADDY_RELEASE_URL="https://github.com/klzgrad/forwardproxy/releases/download/v2.10.0-naive/caddy-forwardproxy-naive.tar.xz"
+      CADDY_TAR_SHA256="598b34841ac88b66f5b0b3a7bb371a02682915e92916e4e017d27be5399cd389"
+      ;;
+    aarch64|arm64)
+      die "Prebuilt Caddy forwardproxy binary for arm64 is not bundled in this installer.
+Build it manually via xcaddy:
+  xcaddy build --with github.com/klzgrad/forwardproxy@latest
+See: https://github.com/klzgrad/naiveproxy"
+      ;;
+    *)
+      die "Unsupported architecture '$arch'. Use xcaddy to build Caddy from source."
+      ;;
+  esac
+  echo "Downloading Caddy (forwardproxy naive) for $arch..." >&2
   local CADDY_DIR="/opt/caddy-forwardproxy-naive"
   mkdir -p "$CADDY_DIR"
 
@@ -611,6 +629,7 @@ main() {
 
   if [[ -x "$CADDY_BIN" && "$UPGRADE" -eq 0 ]]; then
     echo "Existing Caddy binary found at $CADDY_BIN - skipping download (use --upgrade to force re-download)." >&2
+    
   else
     local TMP_TAR
     TMP_TAR=$(mktemp_tar)
