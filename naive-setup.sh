@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NAIVE_ENV_FILE="/etc/caddy/naive.env"
+
 die() {
   echo "Error: $*" >&2
   exit 1
@@ -292,6 +294,19 @@ domain_resolves_to_ip() {
   return 1
 }
 
+write_naive_env() {
+  local env_path=$1 domain=$2 email=$3 user=$4 pass=$5
+  mkdir -p "$(dirname "$env_path")"
+  cat >"$env_path" <<EOF
+NAIVE_DOMAIN="$domain"
+NAIVE_EMAIL="$email"
+PROXY_USER="$user"
+PROXY_PASS="$pass"
+EOF
+  chown root:root "$env_path"
+  chmod 0600 "$env_path"
+}
+
 caddy_quote() {
   local _s=$1 _out
   _out=$(printf '%s' "$_s" | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -550,6 +565,7 @@ main() {
     local _exports
     _exports=$(exports_from_caddyfile "$caddyfile_path") || die "Could not parse $caddyfile_path (expected :443, tls, and basic_auth lines)."
     eval "$_exports"
+    write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS"
   else
     printf 'Domain name (e.g. example.com): '
     read -r DOMAIN
@@ -583,6 +599,8 @@ main() {
 
     read_secret "Proxy password: "
     [[ -n "${PROXY_PASS:-}" ]] || die "Proxy password is required."
+
+    write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN_TRIM" "$EMAIL_TRIM" "$PROXY_USER" "$PROXY_PASS"
 
     local TMP_CADDY
     TMP_CADDY=$(mktemp_file)
