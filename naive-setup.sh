@@ -685,8 +685,6 @@ main() {
 
     local TMP_CADDY
     TMP_CADDY=$(mktemp_file)
-    # Fix: Combined cleanup trap
-    trap 'rm -f "$TMP_CADDY"' EXIT
     
     write_caddyfile "$DOMAIN_TRIM" "$EMAIL_TRIM" "$PROXY_USER" "$PROXY_PASS" "$TMP_CADDY"
     mv "$TMP_CADDY" "$caddyfile_path"
