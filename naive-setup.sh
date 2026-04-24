@@ -727,7 +727,7 @@ main() {
     local TMP_TAR
     TMP_TAR=$(mktemp_tar)
     # Fix: update trap to include tar
-    trap 'rm -f "$TMP_CADDY" "$TMP_TAR"' EXIT
+    trap '[[ -n "${TMP_CADDY:-}" ]] && rm -f "$TMP_CADDY"; [[ -n "${TMP_TAR:-}" ]] && rm -f "$TMP_TAR"' EXIT
     echo "Downloading Caddy (forwardproxy naive) for $arch..." >&2
     download_to "$CADDY_RELEASE_URL" "$TMP_TAR"
     if command -v sha256sum >/dev/null 2>&1; then
