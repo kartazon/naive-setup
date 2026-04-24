@@ -651,7 +651,7 @@ main() {
     printf 'Domain name (e.g. example.com): '
     read -r DOMAIN
     local DOMAIN_TRIM
-    DOMAIN_TRIM=$(printf '%s' "$domain" | tr -d ' ')
+    DOMAIN_TRIM=$(printf '%s' "$DOMAIN" | tr -d ' ')
     [[ -n "$DOMAIN_TRIM" ]] || die "Domain name is required."
 
     echo "Fetching public IP..."
