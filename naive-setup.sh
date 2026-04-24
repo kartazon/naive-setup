@@ -505,6 +505,15 @@ ensure_caddy_user() {
 main() {
   echo "Naive server setup (Caddy + forwardproxy)..." >&2
 
+  local UPGRADE=0
+  for arg in "$@"; do
+    case "$arg" in
+      --upgrade)
+        UPGRADE=1
+        ;;
+    esac
+  done
+
   check_ports
 
   offer_install_dependencies
@@ -585,28 +594,34 @@ main() {
   local CADDY_DIR="/opt/caddy-forwardproxy-naive"
   mkdir -p "$CADDY_DIR"
 
-  local TMP_TAR
-  TMP_TAR=$(mktemp_tar)
-  echo "Downloading Caddy (forwardproxy naive)..."
-  download_to "$CADDY_RELEASE_URL" "$TMP_TAR"
+  local CADDY_BIN="$CADDY_DIR/caddy"
 
-  if command -v sha256sum >/dev/null 2>&1; then
-    local CADDY_TAR_SUM
-    CADDY_TAR_SUM=$(sha256sum "$TMP_TAR" | awk '{print $1}')
-    if [[ "$CADDY_TAR_SUM" != "$CADDY_TAR_SHA256" ]]; then
-      rm -f "$TMP_TAR"
-      die "Caddy archive SHA256 mismatch. Expected $CADDY_TAR_SHA256, got $CADDY_TAR_SUM"
-    fi
+  if [[ -x "$CADDY_BIN" && "$UPGRADE" -eq 0 ]]; then
+    echo "Existing Caddy binary found at $CADDY_BIN - skipping download (use --upgrade to force re-download)." >&2
   else
-    echo "Warning: sha256sum not found - skipping Caddy archive integrity check." >&2
+    local TMP_TAR
+    TMP_TAR=$(mktemp_tar)
+    echo "Downloading Caddy (forwardproxy naive)..." >&2
+    download_to "$CADDY_RELEASE_URL" "$TMP_TAR"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+      local CADDY_TAR_SUM
+      CADDY_TAR_SUM=$(sha256sum "$TMP_TAR" | awk '{print $1}')
+      if [[ "$CADDY_TAR_SUM" != "$CADDY_TAR_SHA256" ]]; then
+        rm -f "$TMP_TAR"
+        die "Caddy archive SHA256 mismatch. Expected $CADDY_TAR_SHA256, got $CADDY_TAR_SUM"
+      fi
+    else
+      echo "Warning: sha256sum not found - skipping Caddy archive integrity check." >&2
+    fi
+
+    tar -xJf "$TMP_TAR" -C "$CADDY_DIR" \
+      || die "Extracting Caddy archive failed. On Alpine install xz: apk add --no-cache xz"
+    rm -f "$TMP_TAR"
+
+    CADDY_BIN=$(find "$CADDY_DIR" -type f \( -name caddy -o -name caddy.exe \) | head -n1)
   fi
 
-  tar -xJf "$TMP_TAR" -C "$CADDY_DIR" \
-    || die "Extracting Caddy archive failed. On Alpine install xz: apk add --no-cache xz"
-  rm -f "$TMP_TAR"
-
-  local CADDY_BIN
-  CADDY_BIN=$(find "$CADDY_DIR" -type f \( -name caddy -o -name caddy.exe \) | head -n1)
   [[ -n "$CADDY_BIN" ]] || die "Could not find caddy binary after extracting archive."
   chmod +x "$CADDY_BIN"
 
