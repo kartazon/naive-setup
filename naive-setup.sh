@@ -495,8 +495,58 @@ show_share_link_and_qr() {
   echo ""
 }
 
-# print_firewall_reminder() as before (omitted here due to length)...
-# port_owner(), check_ports(), ensure_caddy_user() also unchanged ...
+print_firewall_reminder() {
+  echo ""
+  echo "================================================================================"
+  echo "  IMPORTANT: open ports 80 (ACME) and 443 (proxy) in your firewall."
+  echo "================================================================================"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
+    echo "  [ufw]"
+    echo "    ufw allow 80/tcp"
+    echo "    ufw allow 443/tcp"
+    echo "    ufw allow 443/udp"
+    echo "    ufw reload"
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q running; then
+    echo "  [firewalld]"
+    echo "    firewall-cmd --permanent --add-service=http"
+    echo "    firewall-cmd --permanent --add-service=https"
+    echo "    firewall-cmd --permanent --add-port=443/udp"
+    echo "    firewall-cmd --reload"
+  elif command -v iptables >/dev/null 2>&1; then
+    echo "  [iptables]"
+    echo "    iptables -A INPUT -p tcp --dport 80  -j ACCEPT"
+    echo "    iptables -A INPUT -p tcp --dport 443 -j ACCEPT"
+    echo "    iptables -A INPUT -p udp --dport 443 -j ACCEPT"
+  else
+    echo "  Open ports 80/tcp, 443/tcp, 443/udp manually for your firewall."
+  fi
+  echo "================================================================================"
+  echo ""
+}
+
+port_owner() {
+  local port=$1
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnp 2>/dev/null | awk -v p=":$port " '$0 ~ p {match($0,/users:\(\("[^"]+"/); if (RSTART) print substr($0,RSTART+9,RLENGTH-10)}'
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tlnp 2>/dev/null | awk -v p=":$port " '$0 ~ p {print $NF}'
+  fi
+}
+
+check_ports() {
+  local blocked=0
+  local p owner
+  for p in 80 443; do
+    owner=$(port_owner "$p")
+    if [[ -n "$owner" ]]; then
+      echo "Warning: port $p is already in use by: $owner" >&2
+      blocked=1
+    fi
+  done
+  if [[ "$blocked" -eq 1 ]]; then
+    die "One or more required ports are in use. Stop the conflicting process and re-run."
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # System user for Caddy.
@@ -580,7 +630,6 @@ main() {
       write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS"
       echo "Migrated config to $NAIVE_ENV_FILE (0600)." >&2
     fi
-    write_naive_env "$NAIVE_ENV_FILE" "$DOMAIN" "$EMAIL" "$PROXY_USER" "$PROXY_PASS"
   else
     printf 'Domain name (e.g. example.com): '
     read -r DOMAIN
@@ -654,7 +703,7 @@ See: https://github.com/klzgrad/naiveproxy"
       die "Unsupported architecture '$arch'. Use xcaddy to build Caddy from source."
       ;;
   esac
-  echo "Downloading Caddy (forwardproxy naive) for $arch..." >&2
+
   local CADDY_DIR="/opt/caddy-forwardproxy-naive"
   mkdir -p "$CADDY_DIR"
 
@@ -662,11 +711,10 @@ See: https://github.com/klzgrad/naiveproxy"
 
   if [[ -x "$CADDY_BIN" && "$UPGRADE" -eq 0 ]]; then
     echo "Existing Caddy binary found at $CADDY_BIN - skipping download (use --upgrade to force re-download)." >&2
-    
   else
     local TMP_TAR
     TMP_TAR=$(mktemp_tar)
-    echo "Downloading Caddy (forwardproxy naive)..." >&2
+    echo "Downloading Caddy (forwardproxy naive) for $arch..." >&2
     download_to "$CADDY_RELEASE_URL" "$TMP_TAR"
 
     if command -v sha256sum >/dev/null 2>&1; then
