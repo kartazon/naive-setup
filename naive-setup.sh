@@ -95,8 +95,7 @@ offer_install_dependencies() {
     pm=zypper
   fi
 
-  local pkgs=""
-  need=""
+  local pkgs="" need=""
   if [[ "$have_curl_wget" -eq 0 ]]; then
     case "$pm" in
       apk) pkgs+=" curl wget ca-certificates" ;;
